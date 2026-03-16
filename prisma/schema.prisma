@@ -1,0 +1,33 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model SurveyResponse {
+  id        String   @id @default(cuid())
+  sessionId String   @unique
+  completed Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  answers   Answer[]
+}
+
+model Answer {
+  id             String        @id @default(cuid())
+  surveyId       String
+  symptomId      String
+  category       String
+  frequency      String
+  impactAreas    String
+  duration       String
+  survey         SurveyResponse @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  
+  @@unique([surveyId, symptomId])
+}
