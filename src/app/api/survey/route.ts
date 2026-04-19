@@ -1,68 +1,100 @@
 import { db } from '@/lib/db';
 import { NextResponse } from 'next/server';
 
+type CategoryResultInput = {
+  total: number;
+  percentage: number;
+  severity: string;
+};
+
+type ResultPayload = {
+  inattentive: CategoryResultInput;
+  hyperactive: CategoryResultInput;
+  unofficial: CategoryResultInput;
+  totalScore: number;
+  totalPercentage: number;
+  overallSeverity: string;
+};
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { sessionId, answers, completed } = body;
+    const {
+      sessionId,
+      answers,
+      completed,
+      name,
+      age,
+      gender,
+      result,
+    }: {
+      sessionId?: string;
+      answers?: Array<{
+        symptomId: string;
+        category: string;
+        frequency: string;
+        impactAreas: string[];
+        duration: string;
+      }>;
+      completed?: boolean;
+      name?: string | null;
+      age?: number | null;
+      gender?: string | null;
+      result?: ResultPayload | null;
+    } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
-    // Create or update survey response
-    const existingSurvey = await db.surveyResponse.findUnique({
+    const baseData = {
+      completed: completed ?? false,
+      name: name ?? null,
+      age: age ?? null,
+      gender: gender ?? null,
+      inattentiveScore: result?.inattentive.total ?? null,
+      inattentivePercentage: result?.inattentive.percentage ?? null,
+      inattentiveSeverity: result?.inattentive.severity ?? null,
+      hyperactiveScore: result?.hyperactive.total ?? null,
+      hyperactivePercentage: result?.hyperactive.percentage ?? null,
+      hyperactiveSeverity: result?.hyperactive.severity ?? null,
+      unofficialScore: result?.unofficial.total ?? null,
+      unofficialPercentage: result?.unofficial.percentage ?? null,
+      unofficialSeverity: result?.unofficial.severity ?? null,
+      totalScore: result?.totalScore ?? null,
+      totalPercentage: result?.totalPercentage ?? null,
+      overallSeverity: result?.overallSeverity ?? null,
+    };
+
+    const survey = await db.surveyResponse.upsert({
       where: { sessionId },
+      update: baseData,
+      create: { sessionId, ...baseData },
     });
 
-    let survey;
-    if (existingSurvey) {
-      survey = await db.surveyResponse.update({
-        where: { sessionId },
-        data: { completed: completed ?? false },
-      });
-    } else {
-      survey = await db.surveyResponse.create({
-        data: {
-          sessionId,
-          completed: completed ?? false,
-        },
-      });
-    }
-
-    // Save answers if provided
     if (answers && Array.isArray(answers)) {
       for (const answer of answers) {
-        const existingAnswer = await db.answer.findUnique({
+        await db.answer.upsert({
           where: {
             surveyId_symptomId: {
               surveyId: survey.id,
               symptomId: answer.symptomId,
             },
           },
+          update: {
+            frequency: answer.frequency,
+            impactAreas: JSON.stringify(answer.impactAreas),
+            duration: answer.duration,
+          },
+          create: {
+            surveyId: survey.id,
+            symptomId: answer.symptomId,
+            category: answer.category,
+            frequency: answer.frequency,
+            impactAreas: JSON.stringify(answer.impactAreas),
+            duration: answer.duration,
+          },
         });
-
-        if (existingAnswer) {
-          await db.answer.update({
-            where: { id: existingAnswer.id },
-            data: {
-              frequency: answer.frequency,
-              impactAreas: JSON.stringify(answer.impactAreas),
-              duration: answer.duration,
-            },
-          });
-        } else {
-          await db.answer.create({
-            data: {
-              surveyId: survey.id,
-              symptomId: answer.symptomId,
-              category: answer.category,
-              frequency: answer.frequency,
-              impactAreas: JSON.stringify(answer.impactAreas),
-              duration: answer.duration,
-            },
-          });
-        }
       }
     }
 
@@ -102,6 +134,9 @@ export async function GET(request: Request) {
     return NextResponse.json({
       exists: true,
       completed: survey.completed,
+      name: survey.name,
+      age: survey.age,
+      gender: survey.gender,
       answers,
     });
   } catch (error) {

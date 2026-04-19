@@ -16,8 +16,10 @@ import {
   type Symptom, getSymptomsByCategory, calculateSymptomScore, getMaxScoreForCategory,
   getFrequencyPoints, getDurationPoints 
 } from '@/lib/survey-data';
-import { 
-  Brain, ChevronLeft, ChevronRight, Check, AlertCircle, 
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Brain, ChevronLeft, ChevronRight, Check, AlertCircle,
   Clock, Target, Users, RotateCcw, Save, Trophy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -36,13 +38,28 @@ interface CategoryResult {
   severity: 'low' | 'moderate' | 'high' | 'very_high';
 }
 
+interface UserInfo {
+  name: string;
+  age: string;
+  gender: string;
+}
+
+interface ResultPayload {
+  inattentive: { total: number; percentage: number; severity: string };
+  hyperactive: { total: number; percentage: number; severity: string };
+  unofficial: { total: number; percentage: number; severity: string };
+  totalScore: number;
+  totalPercentage: number;
+  overallSeverity: string;
+}
+
 export default function ADHDSurvey() {
   const [sessionId] = useState(() => {
     if (typeof window !== 'undefined') {
-      const stored = sessionStorage.getItem('adhd-survey-session');
+      const stored = localStorage.getItem('adhd-survey-session');
       if (stored) return stored;
       const newId = uuidv4();
-      sessionStorage.setItem('adhd-survey-session', newId);
+      localStorage.setItem('adhd-survey-session', newId);
       return newId;
     }
     return uuidv4();
@@ -53,6 +70,9 @@ export default function ADHDSurvey() {
   const [isSaving, setIsSaving] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [userInfo, setUserInfo] = useState<UserInfo>({ name: '', age: '', gender: '' });
+  const [showIntro, setShowIntro] = useState(true);
+  const [introError, setIntroError] = useState('');
 
   const currentSymptom = SYMPTOMS[currentSymptomIndex];
   const currentCategory = SURVEY_CATEGORIES[currentSymptom.category];
@@ -64,16 +84,26 @@ export default function ADHDSurvey() {
       try {
         const res = await fetch(`/api/survey?sessionId=${sessionId}`);
         const data = await res.json();
-        if (data.exists && data.answers) {
-          const loadedAnswers: Record<string, SymptomAnswer> = {};
-          data.answers.forEach((a: { symptomId: string; frequency: string; impactAreas: string[]; duration: string }) => {
-            loadedAnswers[a.symptomId] = {
-              frequency: a.frequency,
-              impactAreas: a.impactAreas,
-              duration: a.duration,
-            };
-          });
-          setAnswers(loadedAnswers);
+        if (data.exists) {
+          if (data.answers) {
+            const loadedAnswers: Record<string, SymptomAnswer> = {};
+            data.answers.forEach((a: { symptomId: string; frequency: string; impactAreas: string[]; duration: string }) => {
+              loadedAnswers[a.symptomId] = {
+                frequency: a.frequency,
+                impactAreas: a.impactAreas,
+                duration: a.duration,
+              };
+            });
+            setAnswers(loadedAnswers);
+          }
+          if (data.name || data.age || data.gender) {
+            setUserInfo({
+              name: data.name ?? '',
+              age: data.age != null ? String(data.age) : '',
+              gender: data.gender ?? '',
+            });
+            setShowIntro(false);
+          }
           if (data.completed) {
             setShowResults(true);
           }
@@ -86,7 +116,12 @@ export default function ADHDSurvey() {
     loadProgress();
   }, [sessionId]);
 
-  const saveProgress = useCallback(async (answersToSave: Record<string, SymptomAnswer>, completed: boolean = false) => {
+  const saveProgress = useCallback(async (
+    answersToSave: Record<string, SymptomAnswer>,
+    completed: boolean = false,
+    infoOverride?: UserInfo,
+    resultPayload?: ResultPayload | null,
+  ) => {
     setIsSaving(true);
     try {
       const formattedAnswers = Object.entries(answersToSave).map(([symptomId, answer]) => {
@@ -100,16 +135,27 @@ export default function ADHDSurvey() {
         };
       });
 
+      const info = infoOverride ?? userInfo;
+      const parsedAge = info.age ? parseInt(info.age, 10) : null;
+
       await fetch('/api/survey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, answers: formattedAnswers, completed }),
+        body: JSON.stringify({
+          sessionId,
+          answers: formattedAnswers,
+          completed,
+          name: info.name || null,
+          age: Number.isFinite(parsedAge as number) ? parsedAge : null,
+          gender: info.gender || null,
+          result: resultPayload ?? null,
+        }),
       });
     } catch (error) {
       console.error('Failed to save:', error);
     }
     setIsSaving(false);
-  }, [sessionId]);
+  }, [sessionId, userInfo]);
 
   const handleFrequencyChange = (value: string) => {
     const newAnswers = {
@@ -172,9 +218,46 @@ export default function ADHDSurvey() {
     setCurrentSymptomIndex(index);
   };
 
+  const buildResultPayload = (): ResultPayload => {
+    const results = calculateResults();
+    const totalScore = results.inattentive.total + results.hyperactive.total + results.unofficial.total;
+    const totalMax = results.inattentive.maxPossible + results.hyperactive.maxPossible + results.unofficial.maxPossible;
+    const totalPercentage = totalMax > 0 ? Math.round((totalScore / totalMax) * 100) : 0;
+    return {
+      inattentive: { total: results.inattentive.total, percentage: results.inattentive.percentage, severity: results.inattentive.severity },
+      hyperactive: { total: results.hyperactive.total, percentage: results.hyperactive.percentage, severity: results.hyperactive.severity },
+      unofficial: { total: results.unofficial.total, percentage: results.unofficial.percentage, severity: results.unofficial.severity },
+      totalScore,
+      totalPercentage,
+      overallSeverity: getSeverity(totalPercentage),
+    };
+  };
+
   const handleSubmit = async () => {
-    await saveProgress(answers, true);
+    await saveProgress(answers, true, undefined, buildResultPayload());
     setShowResults(true);
+  };
+
+  const handleStartSurvey = () => {
+    const trimmedName = userInfo.name.trim();
+    const parsedAge = parseInt(userInfo.age, 10);
+    if (!trimmedName) {
+      setIntroError('يرجى إدخال الاسم');
+      return;
+    }
+    if (!userInfo.age || !Number.isFinite(parsedAge) || parsedAge < 1 || parsedAge > 120) {
+      setIntroError('يرجى إدخال عمر صحيح');
+      return;
+    }
+    if (!userInfo.gender) {
+      setIntroError('يرجى اختيار الجنس');
+      return;
+    }
+    setIntroError('');
+    const info = { name: trimmedName, age: userInfo.age, gender: userInfo.gender };
+    setUserInfo(info);
+    setShowIntro(false);
+    saveProgress(answers, false, info);
   };
 
   const handleRestart = async () => {
@@ -182,7 +265,9 @@ export default function ADHDSurvey() {
     setAnswers({});
     setCurrentSymptomIndex(0);
     setShowResults(false);
-    sessionStorage.removeItem('adhd-survey-session');
+    setShowIntro(true);
+    setUserInfo({ name: '', age: '', gender: '' });
+    localStorage.removeItem('adhd-survey-session');
   };
 
   const isCurrentAnswerComplete = () => {
@@ -274,6 +359,72 @@ export default function ADHDSurvey() {
           <Brain className="w-16 h-16 mx-auto text-primary animate-pulse" />
           <p className="mt-4 text-muted-foreground">جاري تحميل الاستبيان...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (showIntro && !showResults) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 p-4" dir="rtl">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <div className="flex justify-center mb-3">
+              <div className="p-3 rounded-full bg-primary/10">
+                <Brain className="w-8 h-8 text-primary" />
+              </div>
+            </div>
+            <CardTitle className="text-2xl">استبيان ADHD</CardTitle>
+            <CardDescription>يرجى إدخال بياناتك قبل البدء</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="name">الاسم</Label>
+              <Input
+                id="name"
+                value={userInfo.name}
+                onChange={(e) => setUserInfo({ ...userInfo, name: e.target.value })}
+                placeholder="الاسم الكامل"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="age">العمر</Label>
+              <Input
+                id="age"
+                type="number"
+                min={1}
+                max={120}
+                value={userInfo.age}
+                onChange={(e) => setUserInfo({ ...userInfo, age: e.target.value })}
+                placeholder="مثال: 25"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="gender">الجنس</Label>
+              <Select
+                value={userInfo.gender}
+                onValueChange={(value) => setUserInfo({ ...userInfo, gender: value })}
+              >
+                <SelectTrigger id="gender">
+                  <SelectValue placeholder="اختر الجنس" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="male">ذكر</SelectItem>
+                  <SelectItem value="female">أنثى</SelectItem>
+                  <SelectItem value="other">آخر</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {introError && (
+              <p className="text-sm text-red-600">{introError}</p>
+            )}
+            <Button className="w-full" onClick={handleStartSurvey}>
+              ابدأ الاستبيان
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              بياناتك تُحفظ بشكل آمن لربط إجاباتك بجلستك فقط.
+            </p>
+          </CardContent>
+        </Card>
       </div>
     );
   }

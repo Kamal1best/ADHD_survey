@@ -13,7 +13,29 @@ datasource db {
 model SurveyResponse {
   id        String   @id @default(cuid())
   sessionId String   @unique
+
+  name   String?
+  age    Int?
+  gender String?
+
   completed Boolean  @default(false)
+
+  inattentiveScore      Int?
+  inattentivePercentage Int?
+  inattentiveSeverity   String?
+
+  hyperactiveScore      Int?
+  hyperactivePercentage Int?
+  hyperactiveSeverity   String?
+
+  unofficialScore      Int?
+  unofficialPercentage Int?
+  unofficialSeverity   String?
+
+  totalScore      Int?
+  totalPercentage Int?
+  overallSeverity String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   answers   Answer[]
@@ -28,6 +50,6 @@ model Answer {
   impactAreas    String
   duration       String
   survey         SurveyResponse @relation(fields: [surveyId], references: [id], onDelete: Cascade)
-  
+
   @@unique([surveyId, symptomId])
 }
